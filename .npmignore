@@ -1,0 +1,30 @@
+# Source
+src/
+
+# iOS/Android build artifacts
+ios/build/
+android/build/
+android/.gradle/
+
+# Development
+example/
+.vscode/
+.idea/
+*.log
+
+# Testing
+__tests__/
+__mocks__/
+coverage/
+
+# Git
+.git/
+.gitignore
+
+# TypeScript source (we ship compiled)
+tsconfig.json
+tsconfig.build.json
+
+# Config files
+.eslintrc*
+.prettierrc*
