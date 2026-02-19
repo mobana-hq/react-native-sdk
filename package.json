@@ -1,7 +1,7 @@
 {
   "name": "@mobana/react-native-sdk",
   "version": "0.2.9",
-  "description": "React Native SDK for Mobana — Simple mobile app attribution, deeplinking, and in-app flows",
+  "description": "React Native SDK for Mobana — Simple mobile app attribution, deeplinking, and dynamic remote flows",
   "main": "lib/commonjs/index.js",
   "module": "lib/module/index.js",
   "types": "lib/typescript/index.d.ts",
@@ -30,11 +30,20 @@
   "keywords": [
     "react-native",
     "attribution",
+    "app-attribution",
+    "mobile-attribution",
     "deeplinking",
+    "deep-link",
+    "universal-links",
+    "app-links",
     "mobile",
     "analytics",
     "install-referrer",
     "utm",
+    "referral",
+    "onboarding",
+    "in-app-flows",
+    "fingerprinting",
     "mobana"
   ],
   "repository": {
