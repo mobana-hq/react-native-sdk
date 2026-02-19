@@ -272,7 +272,7 @@ export function FlowWebView({
         params,
         installId,
         platform: Platform.OS === 'ios' ? 'ios' : 'android',
-        colorScheme: colorScheme || 'light',
+        colorScheme: colorScheme === 'dark' ? 'dark' : 'light',
         localData,
         safeArea,
       });
@@ -283,7 +283,7 @@ export function FlowWebView({
         config.js,
         bridgeScript,
         safeArea,
-        colorScheme || 'light'
+        colorScheme === 'dark' ? 'dark' : 'light'
       );
 
       setHtmlContent(fullHtml);
