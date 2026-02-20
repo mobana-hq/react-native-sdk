@@ -429,22 +429,33 @@ export function buildFlowHtml(
 ): string {
   let fullHtml = html;
 
-  // 0. Ensure viewport meta tag has viewport-fit=cover (required for edge-to-edge rendering on iOS)
+  // 0. Ensure viewport meta tag prevents zoom and has viewport-fit=cover for edge-to-edge rendering.
+  // Zoom is always disabled — flows are native UI surfaces, not web pages users should zoom.
   const viewportMetaRegex = /<meta\s+[^>]*name=["']viewport["'][^>]*>/i;
   const viewportMatch = fullHtml.match(viewportMetaRegex);
   if (viewportMatch) {
     const existingTag = viewportMatch[0];
-    if (!existingTag.includes('viewport-fit=cover')) {
-      // Append viewport-fit=cover to existing content attribute
-      const updatedTag = existingTag.replace(
-        /content=["']([^"']*)["']/i,
-        (match, content) => `content="${content}, viewport-fit=cover"`
-      );
-      fullHtml = fullHtml.replace(existingTag, updatedTag);
-    }
+    // Rewrite the content attribute to enforce zoom prevention and viewport-fit=cover,
+    // stripping any conflicting user-scalable or maximum-scale values the flow may have set.
+    const updatedTag = existingTag.replace(
+      /content=["']([^"']*)["']/i,
+      (_match, content) => {
+        // Remove any existing user-scalable / maximum-scale declarations
+        let cleaned = content
+          .replace(/,?\s*user-scalable=[^\s,]*/gi, '')
+          .replace(/,?\s*maximum-scale=[^\s,]*/gi, '');
+        // Append our required values
+        if (!cleaned.includes('viewport-fit=cover')) {
+          cleaned += ', viewport-fit=cover';
+        }
+        cleaned += ', maximum-scale=1.0, user-scalable=no';
+        return `content="${cleaned.replace(/^,\s*/, '')}"`;
+      }
+    );
+    fullHtml = fullHtml.replace(existingTag, updatedTag);
   } else {
-    // No viewport meta tag — inject a sensible default
-    const defaultViewport = '<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">';
+    // No viewport meta tag — inject a sensible default with zoom disabled
+    const defaultViewport = '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">';
     if (fullHtml.includes('</head>')) {
       fullHtml = fullHtml.replace(/<head([^>]*)>/i, `<head$1>${defaultViewport}`);
     } else if (fullHtml.includes('<body')) {

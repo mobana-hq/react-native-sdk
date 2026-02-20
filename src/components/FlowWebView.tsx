@@ -786,8 +786,10 @@ export function FlowWebView({
         mediaPlaybackRequiresUserAction={false}
         scrollEnabled={true}
         bounces={false}
+        overScrollMode="never"
         showsHorizontalScrollIndicator={false}
         showsVerticalScrollIndicator={false}
+        scalesPageToFit={false}
         // Security: don't allow navigation away from the flow
         onShouldStartLoadWithRequest={(request: { url: string }) => {
           // Allow initial load and javascript: URLs
