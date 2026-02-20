@@ -481,6 +481,38 @@ body {
   -webkit-touch-callout: none;
   overflow: hidden;
 }
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+*::-webkit-scrollbar {
+  width: 3px;
+  height: 3px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 100px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.35);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+@media (prefers-color-scheme: dark) {
+  * {
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.35);
+  }
+}
 </style>`;
   if (fullHtml.includes('</head>')) {
     // Insert at the START of <head> so it comes before any flow styles
