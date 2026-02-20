@@ -83,30 +83,35 @@ describe('findAttribution', () => {
     });
 
     const result = await findAttribution(ENDPOINT, APP_KEY, 'inst_1', deviceInfo, null, 10000, false);
-    expect(result).toEqual(serverResponse);
+    expect(result.data).toEqual(serverResponse);
+    expect(result.errorType).toBeUndefined();
   });
 
-  it('returns null on non-200 response', async () => {
+  it('returns server errorType and status on non-200 response', async () => {
     mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
 
     const result = await findAttribution(ENDPOINT, APP_KEY, 'inst_1', deviceInfo, null, 10000, false);
-    expect(result).toBeNull();
+    expect(result.data).toBeNull();
+    expect(result.errorType).toBe('server');
+    expect(result.status).toBe(500);
   });
 
-  it('returns null on network error', async () => {
+  it('returns network errorType on network error', async () => {
     mockFetch.mockRejectedValueOnce(new Error('Network failed'));
 
     const result = await findAttribution(ENDPOINT, APP_KEY, 'inst_1', deviceInfo, null, 10000, false);
-    expect(result).toBeNull();
+    expect(result.data).toBeNull();
+    expect(result.errorType).toBe('network');
   });
 
-  it('returns null on abort (timeout)', async () => {
+  it('returns timeout errorType on abort', async () => {
     const abortError = new Error('Aborted');
     abortError.name = 'AbortError';
     mockFetch.mockRejectedValueOnce(abortError);
 
     const result = await findAttribution(ENDPOINT, APP_KEY, 'inst_1', deviceInfo, null, 10000, false);
-    expect(result).toBeNull();
+    expect(result.data).toBeNull();
+    expect(result.errorType).toBe('timeout');
   });
 });
 

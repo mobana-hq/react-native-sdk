@@ -32,6 +32,17 @@ export interface MobanaConfig {
    * When true, logs SDK operations to console
    */
   debug?: boolean;
+
+  /**
+   * Automatically fetch attribution when init() is called (default: true)
+   *
+   * When true, attribution is fetched in the background on init — non-blocking.
+   * The result is cached so any subsequent getAttribution() call returns instantly.
+   *
+   * Set to false to delay attribution until you explicitly call getAttribution()
+   * (e.g., to wait for GDPR consent before making any network calls).
+   */
+  autoAttribute?: boolean;
 }
 
 // ============================================
@@ -298,6 +309,41 @@ export interface Attribution<T = Record<string, unknown>> {
    * - < 1.0 = Probabilistic match
    */
   confidence: number;
+}
+
+/**
+ * Error details returned when an attribution request fails
+ */
+export interface AttributionError {
+  /**
+   * Type of error:
+   * - 'network' — no internet connection or request was blocked
+   * - 'timeout' — request exceeded the timeout limit
+   * - 'server' — server returned an HTTP error
+   * - 'sdk_not_configured' — SDK.init() was not called before getAttribution()
+   * - 'sdk_disabled' — SDK is disabled (enabled: false in config)
+   * - 'unknown' — unexpected error
+   */
+  type: 'network' | 'timeout' | 'server' | 'sdk_not_configured' | 'sdk_disabled' | 'unknown';
+  /** HTTP status code (only present for 'server' type) */
+  status?: number;
+}
+
+/**
+ * Result returned by getAttribution()
+ */
+export interface AttributionResult<T = Record<string, unknown>> {
+  /**
+   * Attribution status:
+   * - 'matched' — attribution data found; check the attribution field
+   * - 'no_match' — no match found (organic install)
+   * - 'error' — request failed or SDK is misconfigured; check the error field for details
+   */
+  status: 'matched' | 'no_match' | 'error';
+  /** Attribution data. Present only when status is 'matched'. */
+  attribution: Attribution<T> | null;
+  /** Error details. Present only when status is 'error'. */
+  error?: AttributionError;
 }
 
 /**

@@ -25,7 +25,10 @@ const mockGetInstallReferrer = getInstallReferrer as jest.Mock;
 
 let sdk: InstanceType<typeof MobanaSDK>;
 
-const SDK_CONFIG = { appId: 'abc123', appKey: 'a'.repeat(32) };
+// Use autoAttribute: false in most integration tests so auto-attribution doesn't
+// consume fetch mocks intended for other operations. Auto-attribution behavior
+// is tested explicitly in its own describe block below.
+const SDK_CONFIG = { appId: 'abc123', appKey: 'a'.repeat(32), autoAttribute: false as const };
 
 beforeEach(() => {
   mockStorage.__resetStore();
@@ -54,7 +57,8 @@ describe('attribution flow (end-to-end)', () => {
     await sdk.init(SDK_CONFIG);
     const first = await sdk.getAttribution();
 
-    expect(first).toEqual({
+    expect(first.status).toBe('matched');
+    expect(first.attribution).toEqual({
       utm_source: 'google',
       utm_campaign: 'summer',
       confidence: 0.75,
@@ -63,7 +67,8 @@ describe('attribution flow (end-to-end)', () => {
 
     // Second call — should come from in-memory cache, no fetch
     const second = await sdk.getAttribution();
-    expect(second).toEqual(first);
+    expect(second.status).toBe('matched');
+    expect(second.attribution).toEqual(first.attribution);
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -88,7 +93,8 @@ describe('attribution flow (end-to-end)', () => {
     const result = await sdk2.getAttribution();
 
     // Should have loaded from AsyncStorage, no new fetch
-    expect(result).toEqual({ utm_source: 'fb', confidence: 0.8 });
+    expect(result.status).toBe('matched');
+    expect(result.attribution).toEqual({ utm_source: 'fb', confidence: 0.8 });
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -100,27 +106,28 @@ describe('attribution flow (end-to-end)', () => {
 
     await sdk.init(SDK_CONFIG);
     const first = await sdk.getAttribution();
-    expect(first).toBeNull();
+    expect(first.status).toBe('no_match');
 
     // New SDK instance (app restart)
     const sdk2 = new MobanaSDK();
     await sdk2.init(SDK_CONFIG);
     const second = await sdk2.getAttribution();
 
-    expect(second).toBeNull();
+    expect(second.status).toBe('no_match');
     // Only one fetch ever made
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
-  it('network failure allows retry on next startup', async () => {
+  it('network failure returns error and allows in-session retry', async () => {
     // First attempt — network fails
     mockFetch.mockRejectedValueOnce(new Error('offline'));
 
     await sdk.init(SDK_CONFIG);
     const first = await sdk.getAttribution();
-    expect(first).toBeNull();
+    expect(first.status).toBe('error');
+    expect(first.error?.type).toBe('network');
 
-    // New SDK instance — this time server responds
+    // Retry in the same session — should succeed
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: () =>
@@ -130,12 +137,33 @@ describe('attribution flow (end-to-end)', () => {
           confidence: 0.6,
         }),
     });
+    const second = await sdk.getAttribution();
+    expect(second.status).toBe('matched');
+    expect(second.attribution?.utm_source).toBe('tiktok');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('network failure allows retry on next startup (new SDK instance)', async () => {
+    mockFetch.mockRejectedValueOnce(new Error('offline'));
+
+    await sdk.init(SDK_CONFIG);
+    await sdk.getAttribution();
 
     const sdk2 = new MobanaSDK();
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          matched: true,
+          attribution: { utm_source: 'tiktok' },
+          confidence: 0.6,
+        }),
+    });
     await sdk2.init(SDK_CONFIG);
     const second = await sdk2.getAttribution();
 
-    expect(second).toEqual({ utm_source: 'tiktok', confidence: 0.6 });
+    expect(second.status).toBe('matched');
+    expect(second.attribution?.utm_source).toBe('tiktok');
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 });
@@ -144,7 +172,7 @@ describe('attribution flow (end-to-end)', () => {
 
 describe('attribution + conversion flow', () => {
   it('trackConversion triggers getAttribution then sends conversion', async () => {
-    // getAttribution fetch
+    // getAttribution fetch (shared by auto-attribution + trackConversion's internal call)
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: () => Promise.resolve({ matched: false }),
@@ -314,7 +342,7 @@ describe('reset flow', () => {
 
     await sdk.init(SDK_CONFIG);
     const before = await sdk.getAttribution();
-    expect(before?.utm_source).toBe('old');
+    expect(before.attribution?.utm_source).toBe('old');
 
     await sdk.reset();
 
@@ -330,7 +358,7 @@ describe('reset flow', () => {
     });
 
     const after = await sdk.getAttribution();
-    expect(after?.utm_source).toBe('new');
+    expect(after.attribution?.utm_source).toBe('new');
 
     // Install ID should be different (old one was deleted)
     const findCall1Body = JSON.parse(mockFetch.mock.calls[0][1].body);
@@ -356,7 +384,8 @@ describe('enable/disable cycle', () => {
     sdk.setEnabled(false);
 
     const attr = await sdk.getAttribution();
-    expect(attr).toBeNull();
+    expect(attr.status).toBe('error');
+    expect(attr.error?.type).toBe('sdk_disabled');
     // Still only 1 fetch (disabled skips API)
     expect(mockFetch).toHaveBeenCalledTimes(1);
 
@@ -372,7 +401,56 @@ describe('enable/disable cycle', () => {
 
     // getAttribution should work from memory cache
     const afterEnable = await sdk.getAttribution();
-    expect(afterEnable).toBeNull(); // Was unmatched
+    expect(afterEnable.status).toBe('no_match'); // Was unmatched
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── Auto-attribution ────────────────────────────────────────────────
+
+describe('auto-attribution (autoAttribute: true)', () => {
+  const AUTO_CONFIG = { appId: 'abc123', appKey: 'a'.repeat(32) };
+
+  it('attribution is fetched in the background on init', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          matched: true,
+          attribution: { utm_source: 'auto_fb' },
+          confidence: 0.85,
+        }),
+    });
+
+    await sdk.init(AUTO_CONFIG);
+    // Yield to let the fire-and-forget attribution complete
+    await new Promise((r) => setTimeout(r, 0));
+
+    // getAttribution should return immediately from cache — no extra fetch
+    const result = await sdk.getAttribution();
+    expect(result.status).toBe('matched');
+    expect(result.attribution?.utm_source).toBe('auto_fb');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('explicit getAttribution shares the in-flight auto-attribution request', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          matched: true,
+          attribution: { utm_source: 'shared' },
+          confidence: 0.9,
+        }),
+    });
+
+    await sdk.init(AUTO_CONFIG);
+
+    // Explicit call while auto-attribution is in-flight — should share, not duplicate
+    const result = await sdk.getAttribution();
+    expect(result.status).toBe('matched');
+    expect(result.attribution?.utm_source).toBe('shared');
+    // Only one network request made despite two getAttribution calls
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });

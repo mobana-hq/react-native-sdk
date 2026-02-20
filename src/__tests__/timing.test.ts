@@ -52,7 +52,8 @@ describe('request timeout', () => {
     jest.advanceTimersByTime(1);
 
     const result = await promise;
-    expect(result).toBeNull();
+    expect(result.data).toBeNull();
+    expect(result.errorType).toBe('timeout');
   });
 
   it('fetchFlow aborts after specified timeout', async () => {
@@ -93,7 +94,8 @@ describe('request timeout', () => {
     // Advance past the timeout
     jest.advanceTimersByTime(15000);
 
-    expect(result).toEqual({ matched: false });
+    expect(result.data).toEqual({ matched: false });
+    expect(result.errorType).toBeUndefined();
     expect(abortHandlerCalled).toBe(false);
   });
 
@@ -118,7 +120,8 @@ describe('request timeout', () => {
     jest.advanceTimersByTime(1);
 
     const result = await promise;
-    expect(result).toBeNull();
+    expect(result.data).toBeNull();
+    expect(result.errorType).toBe('timeout');
   });
 });
 
@@ -189,7 +192,7 @@ describe('deduplication timing', () => {
     const results = await Promise.all(promises);
 
     for (const r of results) {
-      expect(r).toEqual({ utm_source: 'x', confidence: 1 });
+      expect(r).toEqual({ status: 'matched', attribution: { utm_source: 'x', confidence: 1 } });
     }
 
     expect(mockFetch).toHaveBeenCalledTimes(1);

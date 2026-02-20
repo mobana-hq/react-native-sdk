@@ -71,6 +71,79 @@ async function request<T>(
 }
 
 /**
+ * Internal result type for requests that need to surface error details.
+ * Used by findAttribution so getAttribution() can distinguish network vs.
+ * server vs. timeout errors.
+ */
+interface RequestResult<U> {
+  data: U | null;
+  errorType?: 'network' | 'timeout' | 'server';
+  /** HTTP status code — only present for 'server' errorType */
+  status?: number;
+}
+
+/**
+ * Like request(), but returns a structured result with error type information
+ * instead of collapsing all failures to null.
+ */
+async function requestWithError<U>(
+  endpoint: string,
+  path: string,
+  body: Record<string, unknown>,
+  appKey: string,
+  timeout: number = DEFAULT_TIMEOUT,
+  debug: boolean = false
+): Promise<RequestResult<U>> {
+  const url = `${endpoint}${path}`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    if (debug) {
+      console.log(`[Mobana] POST ${url}`, body);
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: buildHeaders(appKey),
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      if (debug) {
+        console.log(`[Mobana] Request failed: ${response.status}`);
+      }
+      return { data: null, errorType: 'server', status: response.status };
+    }
+
+    const data = await response.json();
+
+    if (debug) {
+      console.log(`[Mobana] Response:`, data);
+    }
+
+    return { data: data as U };
+  } catch (error) {
+    clearTimeout(timeoutId);
+
+    const isTimeout = error instanceof Error && error.name === 'AbortError';
+
+    if (debug) {
+      if (isTimeout) {
+        console.log(`[Mobana] Request timed out after ${timeout}ms`);
+      } else {
+        console.log(`[Mobana] Request error:`, error);
+      }
+    }
+
+    return { data: null, errorType: isTimeout ? 'timeout' : 'network' };
+  }
+}
+
+/**
  * Call /find endpoint to get attribution
  */
 export async function findAttribution<T = Record<string, unknown>>(
@@ -81,8 +154,8 @@ export async function findAttribution<T = Record<string, unknown>>(
   dacid: string | null,
   timeout: number,
   debug: boolean
-): Promise<FindResponse<T> | null> {
-  return request<FindResponse<T>>(
+): Promise<RequestResult<FindResponse<T>>> {
+  return requestWithError<FindResponse<T>>(
     endpoint,
     '/find',
     {

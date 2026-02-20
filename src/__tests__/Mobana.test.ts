@@ -1,4 +1,4 @@
-import type { FindResponse, FlowFetchResponse, ConversionEvent } from '../types';
+import type { FindResponse, FlowFetchResponse, ConversionEvent, AttributionResult } from '../types';
 
 // ─── Mocks (must be before import) ─────────────────────────────────
 
@@ -126,10 +126,11 @@ describe('init', () => {
   it('sets config with defaults', async () => {
     await sdk.init(initConfig());
     // Verify SDK is configured by calling getAttribution (should not warn)
-    mockFindAttribution.mockResolvedValueOnce({ matched: false });
+    mockFindAttribution.mockResolvedValueOnce({ data: { matched: false } });
     const result = await sdk.getAttribution();
     // Should have called API (proving SDK is configured)
     expect(mockFindAttribution).toHaveBeenCalled();
+    expect(result.status).toBe('no_match');
   });
 
   it('eagerly generates installId on init', async () => {
@@ -151,9 +152,38 @@ describe('init', () => {
     expect(mockTrackConversion).toHaveBeenCalled();
   });
 
+  it('fires attribution in background when autoAttribute is true (default)', async () => {
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
+    await sdk.init(initConfig());
+    // Yield to let the fire-and-forget attribution promise run
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockFindAttribution).toHaveBeenCalled();
+  });
+
+  it('does not fire attribution on init when autoAttribute is false', async () => {
+    await sdk.init(initConfig({ autoAttribute: false }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockFindAttribution).not.toHaveBeenCalled();
+  });
+
+  it('auto-attribution result is ready when getAttribution is called later', async () => {
+    mockFindAttribution.mockResolvedValue({
+      data: { matched: true, attribution: { utm_source: 'auto', confidence: 0.9 }, confidence: 0.9 },
+    });
+    await sdk.init(initConfig());
+    // Let auto-attribution complete
+    await new Promise((r) => setTimeout(r, 0));
+
+    const result = await sdk.getAttribution();
+    expect(result.status).toBe('matched');
+    expect(result.attribution?.utm_source).toBe('auto');
+    // Should NOT have made a second API call — result was already cached by auto-attribution
+    expect(mockFindAttribution).toHaveBeenCalledTimes(1);
+  });
+
   it('re-init with different appId updates endpoint', async () => {
     await sdk.init(initConfig({ appId: 'first' }));
-    mockFindAttribution.mockResolvedValueOnce({ matched: false });
+    mockFindAttribution.mockResolvedValueOnce({ data: { matched: false } });
     await sdk.getAttribution();
     expect(mockFindAttribution).toHaveBeenCalledWith(
       'https://first.mobana.ai',
@@ -164,7 +194,7 @@ describe('init', () => {
     // Reset so memory cache is cleared, then re-init
     await sdk.reset();
     await sdk.init(initConfig({ appId: 'second' }));
-    mockFindAttribution.mockResolvedValueOnce({ matched: false });
+    mockFindAttribution.mockResolvedValueOnce({ data: { matched: false } });
     await sdk.getAttribution();
     expect(mockFindAttribution).toHaveBeenLastCalledWith(
       'https://second.mobana.ai',
@@ -177,27 +207,31 @@ describe('init', () => {
 // ─── getAttribution() ───────────────────────────────────────────────
 
 describe('getAttribution', () => {
-  it('returns null before init', async () => {
+  it('returns error before init', async () => {
     const result = await sdk.getAttribution();
-    expect(result).toBeNull();
+    expect(result.status).toBe('error');
+    expect(result.attribution).toBeNull();
+    expect(result.error?.type).toBe('sdk_not_configured');
     expect(mockFindAttribution).not.toHaveBeenCalled();
   });
 
-  it('returns null when disabled', async () => {
+  it('returns error when disabled', async () => {
     await sdk.init(initConfig({ enabled: false }));
     const result = await sdk.getAttribution();
-    expect(result).toBeNull();
+    expect(result.status).toBe('error');
+    expect(result.attribution).toBeNull();
+    expect(result.error?.type).toBe('sdk_disabled');
     expect(mockFindAttribution).not.toHaveBeenCalled();
   });
 
   it('fetches from API on first call', async () => {
-    await sdk.init(initConfig());
+    await sdk.init(initConfig({ autoAttribute: false }));
     const apiResponse: FindResponse = {
       matched: true,
       attribution: { utm_source: 'facebook', confidence: 0.85 },
       confidence: 0.85,
     };
-    mockFindAttribution.mockResolvedValueOnce(apiResponse);
+    mockFindAttribution.mockResolvedValueOnce({ data: apiResponse });
 
     const result = await sdk.getAttribution();
 
@@ -210,22 +244,23 @@ describe('getAttribution', () => {
       10000,
       false
     );
-    expect(result).toEqual({ utm_source: 'facebook', confidence: 0.85 });
+    expect(result.status).toBe('matched');
+    expect(result.attribution).toEqual({ utm_source: 'facebook', confidence: 0.85 });
   });
 
   it('caches result and returns from memory on second call', async () => {
-    await sdk.init(initConfig());
+    await sdk.init(initConfig({ autoAttribute: false }));
     mockFindAttribution.mockResolvedValueOnce({
-      matched: true,
-      attribution: { utm_source: 'google', confidence: 0.7 },
-      confidence: 0.7,
+      data: { matched: true, attribution: { utm_source: 'google', confidence: 0.7 }, confidence: 0.7 },
     });
 
     const first = await sdk.getAttribution();
     const second = await sdk.getAttribution();
 
     expect(mockFindAttribution).toHaveBeenCalledTimes(1);
-    expect(first).toEqual(second);
+    expect(first.status).toBe('matched');
+    expect(second.status).toBe('matched');
+    expect(first.attribution).toEqual(second.attribution);
   });
 
   it('returns from AsyncStorage cache if present', async () => {
@@ -234,29 +269,30 @@ describe('getAttribution', () => {
       attribution: { utm_source: 'cached', confidence: 0.9 },
       checkedAt: Date.now(),
     });
-    await sdk.init(initConfig());
+    await sdk.init(initConfig({ autoAttribute: false }));
 
     const result = await sdk.getAttribution();
 
     expect(mockFindAttribution).not.toHaveBeenCalled();
-    expect(result).toEqual({ utm_source: 'cached', confidence: 0.9 });
+    expect(result.status).toBe('matched');
+    expect(result.attribution).toEqual({ utm_source: 'cached', confidence: 0.9 });
   });
 
   it('caches unmatched result and skips API on subsequent calls', async () => {
-    await sdk.init(initConfig());
-    mockFindAttribution.mockResolvedValueOnce({ matched: false });
+    await sdk.init(initConfig({ autoAttribute: false }));
+    mockFindAttribution.mockResolvedValueOnce({ data: { matched: false } });
 
     const first = await sdk.getAttribution();
     const second = await sdk.getAttribution();
 
-    expect(first).toBeNull();
-    expect(second).toBeNull();
+    expect(first.status).toBe('no_match');
+    expect(second.status).toBe('no_match');
     expect(mockFindAttribution).toHaveBeenCalledTimes(1);
   });
 
   it('deduplicates concurrent calls', async () => {
-    await sdk.init(initConfig());
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    await sdk.init(initConfig({ autoAttribute: false }));
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
 
     const [r1, r2, r3] = await Promise.all([
       sdk.getAttribution(),
@@ -265,21 +301,51 @@ describe('getAttribution', () => {
     ]);
 
     expect(mockFindAttribution).toHaveBeenCalledTimes(1);
-    expect(r1).toEqual(r2);
-    expect(r2).toEqual(r3);
+    expect(r1.status).toBe('no_match');
+    expect(r2.status).toBe('no_match');
+    expect(r3.status).toBe('no_match');
   });
 
-  it('returns null on API error without crashing', async () => {
-    await sdk.init(initConfig());
-    mockFindAttribution.mockResolvedValueOnce(null);
+  it('returns error result on API failure without crashing', async () => {
+    await sdk.init(initConfig({ autoAttribute: false }));
+    mockFindAttribution.mockResolvedValueOnce({ data: null, errorType: 'network' });
 
     const result = await sdk.getAttribution();
-    expect(result).toBeNull();
+    expect(result.status).toBe('error');
+    expect(result.attribution).toBeNull();
+    expect(result.error?.type).toBe('network');
+  });
+
+  it('returns error result with server status on HTTP error', async () => {
+    await sdk.init(initConfig({ autoAttribute: false }));
+    mockFindAttribution.mockResolvedValueOnce({ data: null, errorType: 'server', status: 503 });
+
+    const result = await sdk.getAttribution();
+    expect(result.status).toBe('error');
+    expect(result.error?.type).toBe('server');
+    expect(result.error?.status).toBe(503);
+  });
+
+  it('retries after error (does not cache error results)', async () => {
+    await sdk.init(initConfig({ autoAttribute: false }));
+    // First call fails
+    mockFindAttribution.mockResolvedValueOnce({ data: null, errorType: 'network' });
+    const first = await sdk.getAttribution();
+    expect(first.status).toBe('error');
+
+    // Second call should retry and succeed
+    mockFindAttribution.mockResolvedValueOnce({
+      data: { matched: true, attribution: { utm_source: 'retry', confidence: 0.8 }, confidence: 0.8 },
+    });
+    const second = await sdk.getAttribution();
+    expect(second.status).toBe('matched');
+    expect(second.attribution?.utm_source).toBe('retry');
+    expect(mockFindAttribution).toHaveBeenCalledTimes(2);
   });
 
   it('uses custom endpoint when provided', async () => {
-    await sdk.init(initConfig({ endpoint: 'https://myproxy.com/d' }));
-    mockFindAttribution.mockResolvedValueOnce({ matched: false });
+    await sdk.init(initConfig({ endpoint: 'https://myproxy.com/d', autoAttribute: false }));
+    mockFindAttribution.mockResolvedValueOnce({ data: { matched: false } });
 
     await sdk.getAttribution();
 
@@ -295,8 +361,8 @@ describe('getAttribution', () => {
   });
 
   it('strips trailing slash from custom endpoint', async () => {
-    await sdk.init(initConfig({ endpoint: 'https://myproxy.com/d/' }));
-    mockFindAttribution.mockResolvedValueOnce({ matched: false });
+    await sdk.init(initConfig({ endpoint: 'https://myproxy.com/d/', autoAttribute: false }));
+    mockFindAttribution.mockResolvedValueOnce({ data: { matched: false } });
 
     await sdk.getAttribution();
 
@@ -320,8 +386,8 @@ describe('getAttribution', () => {
       language: 'en-US',
     });
     mockGetInstallReferrer.mockResolvedValueOnce('click_xyz');
-    await sdk.init(initConfig());
-    mockFindAttribution.mockResolvedValueOnce({ matched: false });
+    await sdk.init(initConfig({ autoAttribute: false }));
+    mockFindAttribution.mockResolvedValueOnce({ data: { matched: false } });
 
     await sdk.getAttribution();
 
@@ -337,8 +403,8 @@ describe('getAttribution', () => {
   });
 
   it('propagates custom timeout to API call', async () => {
-    await sdk.init(initConfig());
-    mockFindAttribution.mockResolvedValueOnce({ matched: false });
+    await sdk.init(initConfig({ autoAttribute: false }));
+    mockFindAttribution.mockResolvedValueOnce({ data: { matched: false } });
 
     await sdk.getAttribution({ timeout: 5000 });
 
@@ -354,8 +420,8 @@ describe('getAttribution', () => {
   });
 
   it('uses default timeout when none specified', async () => {
-    await sdk.init(initConfig());
-    mockFindAttribution.mockResolvedValueOnce({ matched: false });
+    await sdk.init(initConfig({ autoAttribute: false }));
+    mockFindAttribution.mockResolvedValueOnce({ data: { matched: false } });
 
     await sdk.getAttribution();
 
@@ -370,16 +436,17 @@ describe('getAttribution', () => {
     );
   });
 
-  it('returns null from AsyncStorage cache when matched is false', async () => {
+  it('returns no_match from AsyncStorage cache when matched is false', async () => {
     mockGetCachedResult.mockResolvedValueOnce({
       matched: false,
       checkedAt: Date.now(),
     });
-    await sdk.init(initConfig());
+    await sdk.init(initConfig({ autoAttribute: false }));
 
     const result = await sdk.getAttribution();
 
-    expect(result).toBeNull();
+    expect(result.status).toBe('no_match');
+    expect(result.attribution).toBeNull();
     expect(mockFindAttribution).not.toHaveBeenCalled();
   });
 
@@ -391,8 +458,8 @@ describe('getAttribution', () => {
       screenHeight: 844,
       language: 'en-US',
     });
-    await sdk.init(initConfig());
-    mockFindAttribution.mockResolvedValueOnce({ matched: false });
+    await sdk.init(initConfig({ autoAttribute: false }));
+    mockFindAttribution.mockResolvedValueOnce({ data: { matched: false } });
 
     await sdk.getAttribution();
 
@@ -425,7 +492,7 @@ describe('trackConversion', () => {
 
   it('sends conversion via API', async () => {
     await sdk.init(initConfig());
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
     mockTrackConversion.mockResolvedValueOnce(true);
 
     await sdk.trackConversion('purchase', 49.99, 'sess_1');
@@ -445,7 +512,7 @@ describe('trackConversion', () => {
 
   it('queues conversion on API failure', async () => {
     await sdk.init(initConfig());
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
     mockTrackConversion.mockResolvedValueOnce(false);
 
     await sdk.trackConversion('signup');
@@ -457,7 +524,7 @@ describe('trackConversion', () => {
 
   it('sends conversion with only name (no value or flowSessionId)', async () => {
     await sdk.init(initConfig());
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
     mockTrackConversion.mockResolvedValueOnce(true);
 
     await sdk.trackConversion('signup');
@@ -477,7 +544,7 @@ describe('trackConversion', () => {
 
   it('includes timestamp in conversion event', async () => {
     await sdk.init(initConfig());
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
     mockTrackConversion.mockResolvedValueOnce(true);
     const before = Date.now();
 
@@ -491,7 +558,7 @@ describe('trackConversion', () => {
 
   it('calls getAttribution first to ensure install record', async () => {
     await sdk.init(initConfig());
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
     mockTrackConversion.mockResolvedValueOnce(true);
 
     await sdk.trackConversion('signup');
@@ -528,7 +595,7 @@ describe('startFlow', () => {
       req.resolve({ completed: true, dismissed: false });
     });
     mockGetGlobalFlowContext.mockReturnValue({ isProviderMounted: true, presentFlow });
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
     mockFetchFlow.mockResolvedValueOnce({
       versionId: 'v1',
       html: '<div>flow</div>',
@@ -547,7 +614,7 @@ describe('startFlow', () => {
       req.resolve({ completed: true, dismissed: false });
     });
     mockGetGlobalFlowContext.mockReturnValue({ isProviderMounted: true, presentFlow });
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
     mockGetCachedFlow.mockResolvedValueOnce({
       versionId: 'v1',
       html: '<div>cached</div>',
@@ -580,7 +647,7 @@ describe('startFlow', () => {
       req.resolve({ completed: true, dismissed: false });
     });
     mockGetGlobalFlowContext.mockReturnValue({ isProviderMounted: true, presentFlow });
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
 
     await sdk.init(initConfig());
 
@@ -609,7 +676,7 @@ describe('startFlow', () => {
       req.resolve({ completed: true, dismissed: false });
     });
     mockGetGlobalFlowContext.mockReturnValue({ isProviderMounted: true, presentFlow });
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
     mockGetCachedFlow.mockResolvedValueOnce({
       versionId: 'v1',
       html: '<div>offline</div>',
@@ -626,7 +693,7 @@ describe('startFlow', () => {
 
   it('returns NETWORK_ERROR when no cache and no network', async () => {
     mockGetGlobalFlowContext.mockReturnValue({ isProviderMounted: true, presentFlow: jest.fn() });
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
     mockGetCachedFlow.mockResolvedValueOnce(null);
     mockFetchFlow.mockResolvedValueOnce(null);
 
@@ -638,7 +705,7 @@ describe('startFlow', () => {
 
   it('returns server error codes (NOT_FOUND)', async () => {
     mockGetGlobalFlowContext.mockReturnValue({ isProviderMounted: true, presentFlow: jest.fn() });
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
     mockFetchFlow.mockResolvedValueOnce({ error: 'NOT_FOUND' } as FlowFetchResponse);
 
     await sdk.init(initConfig());
@@ -649,7 +716,7 @@ describe('startFlow', () => {
 
   it('returns server error codes (PLAN_REQUIRED)', async () => {
     mockGetGlobalFlowContext.mockReturnValue({ isProviderMounted: true, presentFlow: jest.fn() });
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
     mockFetchFlow.mockResolvedValueOnce({ error: 'PLAN_REQUIRED' } as FlowFetchResponse);
 
     await sdk.init(initConfig());
@@ -660,7 +727,7 @@ describe('startFlow', () => {
 
   it('returns server error codes (FLOW_LIMIT_EXCEEDED)', async () => {
     mockGetGlobalFlowContext.mockReturnValue({ isProviderMounted: true, presentFlow: jest.fn() });
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
     mockFetchFlow.mockResolvedValueOnce({ error: 'FLOW_LIMIT_EXCEEDED' } as FlowFetchResponse);
 
     await sdk.init(initConfig());
@@ -674,7 +741,7 @@ describe('startFlow', () => {
       req.resolve({ completed: true, dismissed: false });
     });
     mockGetGlobalFlowContext.mockReturnValue({ isProviderMounted: true, presentFlow });
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
     mockFetchFlow.mockResolvedValueOnce({
       versionId: 'v1',
       html: '<div>flow</div>',
@@ -706,9 +773,7 @@ describe('startFlow', () => {
     });
     mockGetGlobalFlowContext.mockReturnValue({ isProviderMounted: true, presentFlow });
     mockFindAttribution.mockResolvedValue({
-      matched: true,
-      attribution: { utm_source: 'fb', confidence: 0.9 },
-      confidence: 0.9,
+      data: { matched: true, attribution: { utm_source: 'fb', confidence: 0.9 }, confidence: 0.9 },
     });
     mockFetchFlow.mockResolvedValueOnce({
       versionId: 'v1',
@@ -728,7 +793,7 @@ describe('startFlow', () => {
 
   it('returns SERVER_ERROR on unexpected response', async () => {
     mockGetGlobalFlowContext.mockReturnValue({ isProviderMounted: true, presentFlow: jest.fn() });
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
     mockFetchFlow.mockResolvedValueOnce({} as FlowFetchResponse);
 
     await sdk.init(initConfig());
@@ -739,7 +804,7 @@ describe('startFlow', () => {
 
   it('returns SERVER_ERROR on thrown exception', async () => {
     mockGetGlobalFlowContext.mockReturnValue({ isProviderMounted: true, presentFlow: jest.fn() });
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
     mockFetchFlow.mockRejectedValueOnce(new Error('boom'));
 
     await sdk.init(initConfig());
@@ -778,7 +843,7 @@ describe('prefetchFlow', () => {
       req.resolve({ completed: true, dismissed: false });
     });
     mockGetGlobalFlowContext.mockReturnValue({ isProviderMounted: true, presentFlow });
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
 
     await sdk.init(initConfig());
 
@@ -840,9 +905,7 @@ describe('reset', () => {
   it('clears in-memory cache so next getAttribution fetches fresh', async () => {
     await sdk.init(initConfig());
     mockFindAttribution.mockResolvedValue({
-      matched: true,
-      attribution: { utm_source: 'fb', confidence: 0.8 },
-      confidence: 0.8,
+      data: { matched: true, attribution: { utm_source: 'fb', confidence: 0.8 }, confidence: 0.8 },
     });
 
     await sdk.getAttribution();
@@ -850,7 +913,7 @@ describe('reset', () => {
 
     await sdk.reset();
 
-    mockFindAttribution.mockResolvedValue({ matched: false });
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
     await sdk.getAttribution();
     expect(mockFindAttribution).toHaveBeenCalledTimes(2);
   });
@@ -870,7 +933,9 @@ describe('setEnabled', () => {
     sdk.setEnabled(false);
 
     const result = await sdk.getAttribution();
-    expect(result).toBeNull();
+    expect(result.status).toBe('error');
+    expect(result.error?.type).toBe('sdk_disabled');
+    expect(result.attribution).toBeNull();
     expect(mockFindAttribution).not.toHaveBeenCalled();
   });
 

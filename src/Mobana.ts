@@ -2,6 +2,7 @@ import type {
   MobanaConfig,
   GetAttributionOptions,
   Attribution,
+  AttributionResult,
   ConversionEvent,
   FlowResult,
   FlowOptions,
@@ -67,10 +68,14 @@ class MobanaSDK {
   private config: MobanaConfig | null = null;
   private isConfigured = false;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private attributionPromise: Promise<Attribution<any> | null> | null = null;
+  private attributionPromise: Promise<AttributionResult<any>> | null = null;
   // In-memory cache for attribution (faster than AsyncStorage)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private cachedAttribution: Attribution<any> | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private cachedAttributionResult: AttributionResult<any> | null = null;
+  // Only true after a definitive server response (matched or no_match) — never on error.
+  // This allows retry on subsequent calls when the first attempt failed.
   private attributionChecked = false;
 
   /**
@@ -131,6 +136,13 @@ class MobanaSDK {
 
     // Flush any queued conversions when SDK is initialized
     await this.flushConversionQueue();
+
+    // Fire attribution in the background unless explicitly disabled.
+    // Non-blocking — init() resolves immediately after this.
+    // The result is cached so any subsequent getAttribution() call returns instantly.
+    if (this.config.autoAttribute !== false) {
+      this.getAttribution().catch(() => {});
+    }
   }
 
   /**
@@ -193,48 +205,61 @@ class MobanaSDK {
    */
   async getAttribution<T = Record<string, unknown>>(
     options: GetAttributionOptions = {}
-  ): Promise<Attribution<T> | null> {
+  ): Promise<AttributionResult<T>> {
     if (!this.isConfigured || !this.config) {
       console.warn('[Mobana] SDK not configured. Call init() first.');
-      return null;
+      return { status: 'error', attribution: null, error: { type: 'sdk_not_configured' } };
     }
 
     if (!this.config.enabled) {
       if (this.config.debug) {
-        console.log('[Mobana] SDK disabled, returning null');
+        console.log('[Mobana] SDK disabled, skipping attribution');
       }
-      return null;
+      return { status: 'error', attribution: null, error: { type: 'sdk_disabled' } };
     }
 
     // Return in-memory cache if available (fastest)
     if (this.attributionChecked) {
-      return this.cachedAttribution as Attribution<T> | null;
+      return this.cachedAttributionResult as AttributionResult<T>;
     }
 
     // Check AsyncStorage cache
     const cached = await getCachedResult<T>();
+
+    // Re-check enabled after the async read — it may have changed (e.g. GDPR opt-out)
+    if (!this.config?.enabled) {
+      return { status: 'error', attribution: null, error: { type: 'sdk_disabled' } };
+    }
+
     if (cached) {
       if (this.config.debug) {
         console.log('[Mobana] Returning cached result, matched:', cached.matched);
       }
-      // Update in-memory cache
+      const result: AttributionResult<T> = cached.matched && cached.attribution
+        ? { status: 'matched', attribution: cached.attribution as Attribution<T> }
+        : { status: 'no_match', attribution: null };
       this.attributionChecked = true;
-      this.cachedAttribution = cached.matched ? (cached.attribution ?? null) : null;
-      return this.cachedAttribution as Attribution<T> | null;
+      this.cachedAttribution = result.attribution;
+      this.cachedAttributionResult = result;
+      return result;
     }
 
-    // Prevent duplicate concurrent requests
+    // Prevent duplicate concurrent requests — both callers get the same promise
     if (this.attributionPromise) {
-      return this.attributionPromise as Promise<Attribution<T> | null>;
+      return this.attributionPromise as Promise<AttributionResult<T>>;
     }
 
     this.attributionPromise = this.fetchAttribution<T>(options);
     const result = await this.attributionPromise;
     this.attributionPromise = null;
 
-    // Update in-memory cache
-    this.attributionChecked = true;
-    this.cachedAttribution = result;
+    // Only cache definitive results. Errors (network, timeout, server) leave
+    // attributionChecked = false so the next call retries automatically.
+    if (result.status !== 'error') {
+      this.attributionChecked = true;
+      this.cachedAttribution = result.attribution;
+      this.cachedAttributionResult = result;
+    }
 
     return result;
   }
@@ -317,6 +342,7 @@ class MobanaSDK {
   async reset(): Promise<void> {
     // Clear in-memory cache
     this.cachedAttribution = null;
+    this.cachedAttributionResult = null;
     this.attributionChecked = false;
     this.attributionPromise = null;
 
@@ -612,7 +638,7 @@ class MobanaSDK {
 
   private async fetchAttribution<T = Record<string, unknown>>(
     options: GetAttributionOptions
-  ): Promise<Attribution<T> | null> {
+  ): Promise<AttributionResult<T>> {
     const { timeout = DEFAULT_TIMEOUT } = options;
 
     try {
@@ -635,8 +661,14 @@ class MobanaSDK {
         }
       }
 
+      // Re-check enabled before making the network call — the SDK may have been
+      // disabled (via setEnabled(false)) while waiting for install ID or referrer
+      if (!this.config?.enabled) {
+        return { status: 'no_match', attribution: null };
+      }
+
       // Make API request
-      const response = await findAttribution<T>(
+      const { data: response, errorType, status } = await findAttribution<T>(
         endpoint,
         this.config!.appKey,
         installId,
@@ -646,54 +678,57 @@ class MobanaSDK {
         this.config?.debug ?? false
       );
 
-      // If no response (network error, timeout), don't cache - allow retry
+      // No response — network error, timeout, or server error
       if (!response) {
         if (this.config?.debug) {
-          console.log('[Mobana] No response from server');
+          console.log('[Mobana] Attribution request failed:', errorType);
         }
-        return null;
+        return {
+          status: 'error',
+          attribution: null,
+          error: {
+            type: errorType ?? 'unknown',
+            ...(status !== undefined && { status }),
+          },
+        };
       }
 
-      // Cache the response if server returned a valid response with matched key
-      // This prevents retrying on every startup
+      // Cache the response for definitive results (matched or unmatched)
       if (typeof response.matched === 'boolean') {
         if (response.matched && response.attribution) {
-          // Build attribution object
           const attribution: Attribution<T> = {
             ...response.attribution,
             confidence: response.confidence ?? 0,
           };
 
-          // Cache matched result
           await setCachedResult(true, attribution);
 
           if (this.config?.debug) {
             console.log('[Mobana] Attribution matched:', attribution);
           }
 
-          return attribution;
+          return { status: 'matched', attribution };
         } else {
-          // Cache unmatched result - prevents retry on next startup
           await setCachedResult<T>(false);
 
           if (this.config?.debug) {
             console.log('[Mobana] No match found (cached)');
           }
 
-          return null;
+          return { status: 'no_match', attribution: null };
         }
       }
 
-      // Unexpected response format
+      // Unexpected response format — treat as transient error (don't cache, allow retry)
       if (this.config?.debug) {
         console.log('[Mobana] Unexpected response format');
       }
-      return null;
+      return { status: 'error', attribution: null, error: { type: 'unknown' } };
     } catch (error) {
       if (this.config?.debug) {
         console.log('[Mobana] Error fetching attribution:', error);
       }
-      return null;
+      return { status: 'error', attribution: null, error: { type: 'unknown' } };
     }
   }
 
