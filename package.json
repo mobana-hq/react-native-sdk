@@ -1,6 +1,6 @@
 {
   "name": "@mobana/react-native-sdk",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "description": "React Native SDK for Mobana — Simple mobile app attribution, deeplinking, and dynamic remote flows",
   "main": "lib/commonjs/index.js",
   "module": "lib/module/index.js",
