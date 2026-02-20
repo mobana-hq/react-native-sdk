@@ -100,6 +100,19 @@ export interface MobanaProviderProps {
    * Custom loading component to show while flow is loading
    */
   loadingComponent?: ReactNode;
+  /**
+   * Background color shown behind the flow while it loads and during modal transitions.
+   * Pass a string for a static color, or an object to automatically switch with the system theme.
+   * Defaults to #FFFFFF (light) / #1c1c1e (dark).
+   *
+   * @example
+   * // Static color
+   * backgroundColor="#F5F5F5"
+   *
+   * // Theme-aware (updates automatically when system theme changes)
+   * backgroundColor={{ light: '#F0EEE9', dark: '#1A1A1A' }}
+   */
+  backgroundColor?: string | { light: string; dark: string };
 }
 
 /**
@@ -125,10 +138,15 @@ export function MobanaProvider({
   modalProps,
   webViewProps,
   loadingComponent,
+  backgroundColor,
 }: MobanaProviderProps) {
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
-  const bgColor = isDark ? '#1c1c1e' : '#FFFFFF';
+  const bgColor = backgroundColor
+    ? typeof backgroundColor === 'string'
+      ? backgroundColor
+      : isDark ? backgroundColor.dark : backgroundColor.light
+    : isDark ? '#1c1c1e' : '#FFFFFF';
 
   if (__DEV__ && !WebViewAvailable) {
     throw new Error(
@@ -365,13 +383,14 @@ export function MobanaProvider({
               onEvent={handleEvent}
               onCallback={currentRequest.options?.onCallback}
               webViewProps={webViewProps}
+              backgroundColor={backgroundColor}
               debug={currentRequest.debug}
             />
           )}
           {isLoading && (
             <View style={[styles.loadingContainer, { backgroundColor: bgColor }]}>
               {loadingComponent || (
-                <ActivityIndicator size="large" color={isDark ? '#0A84FF' : '#007AFF'} />
+                <ActivityIndicator size="large" color="#8E8E93" />
               )}
             </View>
           )}

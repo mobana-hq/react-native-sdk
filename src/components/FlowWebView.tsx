@@ -223,6 +223,12 @@ export interface FlowWebViewProps {
   onCallback?: (data: Record<string, unknown>) => Promise<Record<string, unknown>>;
   /** Custom props forwarded to the underlying WebView */
   webViewProps?: Record<string, unknown>;
+  /**
+   * Background color shown behind the flow while it loads.
+   * Pass a string for a static color, or an object to match the system theme.
+   * Defaults to #FFFFFF (light) / #1c1c1e (dark).
+   */
+  backgroundColor?: string | { light: string; dark: string };
   /** Enable debug logging */
   debug?: boolean;
 }
@@ -245,6 +251,7 @@ export function FlowWebView({
   onEvent,
   onCallback,
   webViewProps,
+  backgroundColor,
   debug = false,
 }: FlowWebViewProps) {
   const webViewRef = useRef<WebViewType>(null);
@@ -252,7 +259,11 @@ export function FlowWebView({
   const [htmlContent, setHtmlContent] = useState<string | null>(null);
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
-  const bgColor = isDark ? '#1c1c1e' : '#FFFFFF';
+  const bgColor = backgroundColor
+    ? typeof backgroundColor === 'string'
+      ? backgroundColor
+      : isDark ? backgroundColor.dark : backgroundColor.light
+    : isDark ? '#1c1c1e' : '#FFFFFF';
 
   // Build HTML with bridge on mount
   useEffect(() => {
@@ -765,7 +776,7 @@ export function FlowWebView({
   if (!htmlContent || !WebView) {
     return (
       <View style={[styles.container, { backgroundColor: bgColor }]}>
-        <ActivityIndicator size="large" color={isDark ? '#0A84FF' : '#007AFF'} />
+        <ActivityIndicator size="large" color="#8E8E93" />
       </View>
     );
   }
@@ -806,7 +817,7 @@ export function FlowWebView({
       />
       {isLoading && (
         <View style={[styles.loadingOverlay, { backgroundColor: bgColor }]}>
-          <ActivityIndicator size="large" color={isDark ? '#0A84FF' : '#007AFF'} />
+          <ActivityIndicator size="large" color="#8E8E93" />
         </View>
       )}
     </View>
