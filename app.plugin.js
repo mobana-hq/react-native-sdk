@@ -227,7 +227,7 @@ function withPermissionInfoPlist(config, permissions) {
     if (permissions.includes('AppTrackingTransparency')) {
       if (!config.modResults.NSUserTrackingUsageDescription) {
         config.modResults.NSUserTrackingUsageDescription = 
-          'This identifier will be used to deliver personalized ads to you.';
+          'This identifier will be used to measure effectiveness of our campaigns and deliver relevant content to you.';
       }
     }
     
