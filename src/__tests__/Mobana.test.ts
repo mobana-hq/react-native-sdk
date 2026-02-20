@@ -956,6 +956,58 @@ describe('setEnabled', () => {
   });
 });
 
+// ─── getInstallId() ─────────────────────────────────────────────────
+
+describe('getInstallId', () => {
+  it('returns the install ID from storage', async () => {
+    mockGetInstallId.mockResolvedValueOnce('my-unique-install-id');
+    const id = await sdk.getInstallId();
+    expect(id).toBe('my-unique-install-id');
+    expect(mockGetInstallId).toHaveBeenCalled();
+  });
+
+  it('works before init', async () => {
+    mockGetInstallId.mockResolvedValueOnce('pre-init-install-id');
+    const id = await sdk.getInstallId();
+    expect(id).toBe('pre-init-install-id');
+  });
+
+  it('returns the same ID used for attribution calls', async () => {
+    mockGetInstallId.mockResolvedValue('consistent-install-id');
+    mockFindAttribution.mockResolvedValue({ data: { matched: false } });
+
+    await sdk.init(initConfig({ autoAttribute: false }));
+    await sdk.getAttribution();
+
+    const id = await sdk.getInstallId();
+    expect(id).toBe('consistent-install-id');
+    expect(mockFindAttribution).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      'consistent-install-id',
+      expect.any(Object),
+      null,
+      expect.any(Number),
+      false
+    );
+  });
+
+  it('returns a different ID after reset', async () => {
+    mockGetInstallId.mockResolvedValueOnce('original-id');
+    const before = await sdk.getInstallId();
+
+    await sdk.init(initConfig());
+    await sdk.reset();
+
+    mockGetInstallId.mockResolvedValueOnce('new-id-after-reset');
+    const after = await sdk.getInstallId();
+
+    expect(before).toBe('original-id');
+    expect(after).toBe('new-id-after-reset');
+    expect(before).not.toBe(after);
+  });
+});
+
 // ─── flushConversionQueue (via init) ────────────────────────────────
 
 describe('flushConversionQueue', () => {

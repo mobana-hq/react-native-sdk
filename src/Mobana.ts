@@ -333,6 +333,25 @@ class MobanaSDK {
   }
 
   /**
+   * Get the install ID for this device
+   * 
+   * A random UUID generated on first launch and persisted locally.
+   * Useful for GDPR data access/deletion requests — this is the identifier
+   * Mobana uses server-side to associate attribution and conversion records.
+   * 
+   * @returns The install ID string
+   * 
+   * @example
+   * ```typescript
+   * const installId = await Mobana.getInstallId();
+   * // Share with support for data access/deletion: support@mobana.ai
+   * ```
+   */
+  async getInstallId(): Promise<string> {
+    return getInstallId();
+  }
+
+  /**
    * Reset all stored attribution data
    * Useful for testing or when user logs out
    * 
