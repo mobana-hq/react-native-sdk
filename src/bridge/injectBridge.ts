@@ -527,9 +527,9 @@ body {
   if (css) {
     const styleTag = `<style>${css}</style>`;
     if (fullHtml.includes('</head>')) {
-      fullHtml = fullHtml.replace('</head>', `${styleTag}</head>`);
+      fullHtml = fullHtml.replace('</head>', () => `${styleTag}</head>`);
     } else if (fullHtml.includes('<body')) {
-      fullHtml = fullHtml.replace('<body', `<head>${styleTag}</head><body`);
+      fullHtml = fullHtml.replace('<body', () => `<head>${styleTag}</head><body`);
     } else {
       fullHtml = styleTag + fullHtml;
     }
@@ -565,7 +565,7 @@ body {
   if (js) {
     const scriptTag = `<script>${js}</script>`;
     if (fullHtml.includes('</body>')) {
-      fullHtml = fullHtml.replace('</body>', `${scriptTag}</body>`);
+      fullHtml = fullHtml.replace('</body>', () => `${scriptTag}</body>`);
     } else {
       fullHtml = fullHtml + scriptTag;
     }
@@ -574,9 +574,9 @@ body {
   // Inject bridge script (must come before user JS)
   const bridgeTag = `<script>${bridgeScript}</script>`;
   if (fullHtml.includes('</head>')) {
-    fullHtml = fullHtml.replace('</head>', `${bridgeTag}</head>`);
+    fullHtml = fullHtml.replace('</head>', () => `${bridgeTag}</head>`);
   } else if (fullHtml.includes('<body')) {
-    fullHtml = fullHtml.replace('<body', `<head>${bridgeTag}</head><body`);
+    fullHtml = fullHtml.replace('<body', () => `<head>${bridgeTag}</head><body`);
   } else {
     fullHtml = bridgeTag + fullHtml;
   }
