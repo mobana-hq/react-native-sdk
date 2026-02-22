@@ -22,10 +22,12 @@ export interface MobanaConfig {
   endpoint?: string;
 
   /**
-   * Enable or disable the SDK (default: true)
-   * Set to false to disable all attribution tracking (e.g., for GDPR opt-out)
+   * Enable or disable attribution and tracking (default: true)
+   * Set to false to disable all tracking (attribution, conversions, flow analytics) — e.g., for GDPR opt-out.
+   * Flows (startFlow, prefetchFlow) are NOT affected — they work regardless of this setting.
+   * When disabled, no installId is sent with flow requests so no trace is left in Mobana.
    */
-  enabled?: boolean;
+  enableTracking?: boolean;
 
   /**
    * Enable debug logging (default: false)
@@ -321,10 +323,10 @@ export interface AttributionError {
    * - 'timeout' — request exceeded the timeout limit
    * - 'server' — server returned an HTTP error
    * - 'sdk_not_configured' — SDK.init() was not called before getAttribution()
-   * - 'sdk_disabled' — SDK is disabled (enabled: false in config)
+   * - 'tracking_disabled' — tracking is disabled (enableTracking: false in config)
    * - 'unknown' — unexpected error
    */
-  type: 'network' | 'timeout' | 'server' | 'sdk_not_configured' | 'sdk_disabled' | 'unknown';
+  type: 'network' | 'timeout' | 'server' | 'sdk_not_configured' | 'tracking_disabled' | 'unknown';
   /** HTTP status code (only present for 'server' type) */
   status?: number;
 }

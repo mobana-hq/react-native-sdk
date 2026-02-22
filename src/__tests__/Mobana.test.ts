@@ -133,9 +133,14 @@ describe('init', () => {
     expect(result.status).toBe('no_match');
   });
 
-  it('eagerly generates installId on init', async () => {
+  it('eagerly generates installId on init when tracking is enabled', async () => {
     await sdk.init(initConfig());
     expect(mockGetInstallId).toHaveBeenCalled();
+  });
+
+  it('does NOT generate installId on init when tracking is disabled', async () => {
+    await sdk.init(initConfig({ enableTracking: false }));
+    expect(mockGetInstallId).not.toHaveBeenCalled();
   });
 
   it('flushes conversion queue on init', async () => {
@@ -215,12 +220,12 @@ describe('getAttribution', () => {
     expect(mockFindAttribution).not.toHaveBeenCalled();
   });
 
-  it('returns error when disabled', async () => {
-    await sdk.init(initConfig({ enabled: false }));
+  it('returns error when tracking is disabled', async () => {
+    await sdk.init(initConfig({ enableTracking: false }));
     const result = await sdk.getAttribution();
     expect(result.status).toBe('error');
     expect(result.attribution).toBeNull();
-    expect(result.error?.type).toBe('sdk_disabled');
+    expect(result.error?.type).toBe('tracking_disabled');
     expect(mockFindAttribution).not.toHaveBeenCalled();
   });
 
@@ -484,8 +489,8 @@ describe('trackConversion', () => {
     expect(mockTrackConversion).not.toHaveBeenCalled();
   });
 
-  it('returns early when disabled', async () => {
-    await sdk.init(initConfig({ enabled: false }));
+  it('returns early when tracking is disabled', async () => {
+    await sdk.init(initConfig({ enableTracking: false }));
     await sdk.trackConversion('signup');
     expect(mockTrackConversion).not.toHaveBeenCalled();
   });
@@ -577,10 +582,31 @@ describe('startFlow', () => {
     expect(result.completed).toBe(false);
   });
 
-  it('returns error when disabled', async () => {
-    await sdk.init(initConfig({ enabled: false }));
+  it('works when tracking is disabled — flows are independent of tracking consent', async () => {
+    const presentFlow = jest.fn((req) => {
+      req.resolve({ completed: true, dismissed: false });
+    });
+    mockGetGlobalFlowContext.mockReturnValue({ isProviderMounted: true, presentFlow });
+    mockFetchFlow.mockResolvedValueOnce({
+      versionId: 'v1',
+      html: '<div>flow</div>',
+    } as FlowFetchResponse);
+
+    await sdk.init(initConfig({ enableTracking: false }));
     const result = await sdk.startFlow('onboarding');
-    expect(result.error).toBe('SDK_NOT_CONFIGURED');
+
+    expect(result.completed).toBe(true);
+    expect(result.error).toBeUndefined();
+    // fetchFlow should have been called with null installId (no tracking data sent)
+    expect(mockFetchFlow).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      'onboarding',
+      null,
+      undefined,
+      expect.any(Number),
+      expect.any(Boolean)
+    );
   });
 
   it('returns PROVIDER_NOT_MOUNTED when no provider', async () => {
@@ -877,10 +903,26 @@ describe('prefetchFlow', () => {
     expect(mockSetCachedFlow).not.toHaveBeenCalled();
   });
 
-  it('no-ops when disabled', async () => {
-    await sdk.init(initConfig({ enabled: false }));
+  it('still prefetches when tracking is disabled — flows are independent of tracking consent', async () => {
+    await sdk.init(initConfig({ enableTracking: false }));
+    mockFetchFlow.mockResolvedValueOnce({
+      versionId: 'v1',
+      html: '<div>prefetched</div>',
+    });
+
     await sdk.prefetchFlow('onboarding');
-    expect(mockFetchFlow).not.toHaveBeenCalled();
+
+    expect(mockFetchFlow).toHaveBeenCalled();
+    // fetchFlow should have been called with null installId (no tracking data sent)
+    expect(mockFetchFlow).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      'onboarding',
+      null,
+      undefined,
+      expect.any(Number),
+      expect.any(Boolean)
+    );
   });
 
   it('no-ops before init', async () => {
@@ -919,35 +961,53 @@ describe('reset', () => {
   });
 });
 
-// ─── setEnabled() ───────────────────────────────────────────────────
+// ─── setTrackingEnabled() ────────────────────────────────────────────
 
-describe('setEnabled', () => {
+describe('setTrackingEnabled', () => {
   it('warns before init', () => {
-    sdk.setEnabled(false);
+    sdk.setTrackingEnabled(false);
     // Should not throw, just warn
     expect(console.warn).toHaveBeenCalled();
   });
 
-  it('disabling blocks getAttribution', async () => {
+  it('disabling tracking blocks getAttribution', async () => {
     await sdk.init(initConfig());
-    sdk.setEnabled(false);
+    sdk.setTrackingEnabled(false);
 
     const result = await sdk.getAttribution();
     expect(result.status).toBe('error');
-    expect(result.error?.type).toBe('sdk_disabled');
+    expect(result.error?.type).toBe('tracking_disabled');
     expect(result.attribution).toBeNull();
     expect(mockFindAttribution).not.toHaveBeenCalled();
+  });
+
+  it('disabling tracking clears the conversion queue — no pending data survives opt-out', async () => {
+    await sdk.init(initConfig());
+    sdk.setTrackingEnabled(false);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mockClearConversionQueue).toHaveBeenCalled();
+  });
+
+  it('enabling tracking generates installId (consent granted after init with tracking disabled)', async () => {
+    await sdk.init(initConfig({ enableTracking: false }));
+    // No installId generated during init
+    expect(mockGetInstallId).not.toHaveBeenCalled();
+
+    sdk.setTrackingEnabled(true);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockGetInstallId).toHaveBeenCalled();
   });
 
   it('re-enabling flushes conversion queue', async () => {
     const queued: ConversionEvent = { installId: 'x', name: 'y', timestamp: 0 };
     await sdk.init(initConfig());
-    sdk.setEnabled(false);
+    sdk.setTrackingEnabled(false);
 
     mockGetConversionQueue.mockResolvedValueOnce([queued]);
     mockTrackConversion.mockResolvedValueOnce(true);
 
-    sdk.setEnabled(true);
+    sdk.setTrackingEnabled(true);
 
     // Give the async flush a tick to execute
     await new Promise((r) => setTimeout(r, 50));
@@ -959,17 +1019,25 @@ describe('setEnabled', () => {
 // ─── getInstallId() ─────────────────────────────────────────────────
 
 describe('getInstallId', () => {
-  it('returns the install ID from storage', async () => {
+  it('returns the install ID from storage when tracking is enabled', async () => {
+    await sdk.init(initConfig({ autoAttribute: false }));
     mockGetInstallId.mockResolvedValueOnce('my-unique-install-id');
     const id = await sdk.getInstallId();
     expect(id).toBe('my-unique-install-id');
     expect(mockGetInstallId).toHaveBeenCalled();
   });
 
-  it('works before init', async () => {
-    mockGetInstallId.mockResolvedValueOnce('pre-init-install-id');
+  it('returns null before init — no tracking consent established, no ID generated', async () => {
     const id = await sdk.getInstallId();
-    expect(id).toBe('pre-init-install-id');
+    expect(id).toBeNull();
+    expect(mockGetInstallId).not.toHaveBeenCalled();
+  });
+
+  it('returns null when tracking is disabled — no ID has been generated', async () => {
+    await sdk.init(initConfig({ enableTracking: false }));
+    const id = await sdk.getInstallId();
+    expect(id).toBeNull();
+    expect(mockGetInstallId).not.toHaveBeenCalled();
   });
 
   it('returns the same ID used for attribution calls', async () => {
@@ -993,10 +1061,10 @@ describe('getInstallId', () => {
   });
 
   it('returns a different ID after reset', async () => {
+    await sdk.init(initConfig({ autoAttribute: false }));
     mockGetInstallId.mockResolvedValueOnce('original-id');
     const before = await sdk.getInstallId();
 
-    await sdk.init(initConfig());
     await sdk.reset();
 
     mockGetInstallId.mockResolvedValueOnce('new-id-after-reset');

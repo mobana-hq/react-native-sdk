@@ -200,7 +200,7 @@ if (result.completed) {
 | `Mobana.trackConversion(name, value?)` | Track post-install conversion events | [Docs →](https://mobana.ai/docs/sdk/track-conversion) |
 | `Mobana.startFlow(slug, options?)` | Display an in-app flow | [Docs →](https://mobana.ai/docs/sdk/start-flow) |
 | `Mobana.prefetchFlow(slug)` | Prefetch a flow for instant display | [Docs →](https://mobana.ai/docs/sdk/prefetch-flow) |
-| `Mobana.setEnabled(enabled)` | Enable/disable the SDK (GDPR consent) | [Docs →](https://mobana.ai/docs/sdk/set-enabled) |
+| `Mobana.setTrackingEnabled(enabled)` | Enable/disable attribution and tracking (GDPR consent). Flows unaffected. | [Docs →](https://mobana.ai/docs/sdk/set-enabled) |
 | `Mobana.reset()` | Clear stored data, generate new install ID | [Docs →](https://mobana.ai/docs/sdk/reset) |
 | `<MobanaProvider>` | Context provider for Flows (wraps your app) | [Docs →](https://mobana.ai/docs/sdk/provider) |
 
@@ -228,7 +228,7 @@ Mobana is built with privacy at its core:
 - **No device IDs** — IDFA/GAID are never required or collected
 - **Privacy-first matching** — attribution works without invasive device fingerprinting
 - **Minimal data** — only what's needed for attribution, nothing more
-- **Opt-out support** — call `Mobana.setEnabled(false)` to disable all tracking
+- **Opt-out support** — call `Mobana.setTrackingEnabled(false)` to disable attribution and tracking (flows continue to work)
 - **GDPR/CCPA compliant** — see our [GDPR guide](https://mobana.ai/docs/guides/gdpr) and [Privacy Policy](https://mobana.ai/privacy)
 
 ## Documentation

@@ -209,7 +209,8 @@ export async function trackConversionApi(
  * 
  * @param endpoint - API endpoint
  * @param slug - Flow slug identifier
- * @param installId - Install ID for tracking
+ * @param installId - Install ID for tracking. Pass null when tracking is disabled — the server will
+ *                    serve the flow without recording any session data.
  * @param cachedVersionId - If provided, server will return { cached: true } if version matches
  * @param debug - Enable debug logging
  */
@@ -217,12 +218,15 @@ export async function fetchFlow(
   endpoint: string,
   appKey: string,
   slug: string,
-  installId: string,
+  installId: string | null,
   cachedVersionId?: string,
   timeout: number = DEFAULT_TIMEOUT,
   debug: boolean = false
 ): Promise<FlowFetchResponse | null> {
-  const params = new URLSearchParams({ installId });
+  const params = new URLSearchParams();
+  if (installId) {
+    params.set('installId', installId);
+  }
   if (cachedVersionId) {
     params.set('versionId', cachedVersionId);
   }
@@ -278,7 +282,8 @@ export async function fetchFlow(
  * 
  * @param endpoint - API endpoint
  * @param slug - Flow slug identifier
- * @param installId - Install ID for tracking
+ * @param installId - Install ID for tracking. Pass null when tracking is disabled — the call is
+ *                    silently skipped so no event data is sent.
  * @param versionId - Flow version that was shown
  * @param sessionId - Session ID for grouping events from a single flow presentation
  * @param event - Event name ('step-1', 'notifications-enabled', 'welcome-viewed', or other event)
@@ -290,7 +295,7 @@ export async function trackFlowEvent(
   endpoint: string,
   appKey: string,
   slug: string,
-  installId: string,
+  installId: string | null,
   versionId: string,
   sessionId: string,
   event: string,
@@ -298,6 +303,11 @@ export async function trackFlowEvent(
   data?: unknown,
   debug: boolean = false
 ): Promise<boolean> {
+  // Tracking is disabled — skip silently so no event data leaves the device
+  if (!installId) {
+    return false;
+  }
+
   const url = `${endpoint}/flows/${slug}/events`;
 
   try {

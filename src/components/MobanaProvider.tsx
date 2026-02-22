@@ -55,7 +55,8 @@ try {
 export interface FlowRequest {
   slug: string;
   config: FlowConfig;
-  installId: string;
+  /** Null when tracking is disabled — flow events are suppressed, no trace left in Mobana. */
+  installId: string | null;
   endpoint: string;
   appKey: string;
   attribution: Attribution | null;

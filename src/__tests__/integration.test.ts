@@ -367,10 +367,10 @@ describe('reset flow', () => {
   });
 });
 
-// ─── Enable/disable cycle ───────────────────────────────────────────
+// ─── Enable/disable tracking cycle ──────────────────────────────────
 
-describe('enable/disable cycle', () => {
-  it('disabled SDK skips everything, re-enable resumes', async () => {
+describe('setTrackingEnabled cycle', () => {
+  it('disabling tracking blocks attribution and conversions, re-enable resumes', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: () => Promise.resolve({ matched: false }),
@@ -380,21 +380,21 @@ describe('enable/disable cycle', () => {
     await sdk.getAttribution();
     expect(mockFetch).toHaveBeenCalledTimes(1);
 
-    // Disable — should block all operations
-    sdk.setEnabled(false);
+    // Disable tracking — attribution and conversions should be blocked
+    sdk.setTrackingEnabled(false);
 
     const attr = await sdk.getAttribution();
     expect(attr.status).toBe('error');
-    expect(attr.error?.type).toBe('sdk_disabled');
-    // Still only 1 fetch (disabled skips API)
+    expect(attr.error?.type).toBe('tracking_disabled');
+    // Still only 1 fetch (tracking disabled skips API)
     expect(mockFetch).toHaveBeenCalledTimes(1);
 
     await sdk.trackConversion('signup');
-    // No new fetch (disabled skips conversion)
+    // No new fetch (tracking disabled skips conversion)
     expect(mockFetch).toHaveBeenCalledTimes(1);
 
     // Re-enable — attribution should still be in memory from before disable
-    sdk.setEnabled(true);
+    sdk.setTrackingEnabled(true);
 
     // Give flush a tick
     await new Promise((r) => setTimeout(r, 10));

@@ -115,56 +115,70 @@ class MobanaSDK {
     }
 
     this.config = {
-      enabled: true,
+      enableTracking: true,
       debug: false,
       ...config,
     };
     this.isConfigured = true;
 
-    // Eagerly generate/retrieve the install ID so it's ready before
-    // the first attribution or conversion call.
-    const installId = await getInstallId();
+    if (this.config.enableTracking) {
+      // Only generate/persist the install ID when tracking is consented to.
+      // This avoids any device storage writes before the user has given consent.
+      const installId = await getInstallId();
 
-    if (this.config.debug) {
-      console.log('[Mobana] Initialized:', {
-        appId: this.config.appId,
-        endpoint: this.config.endpoint,
-        enabled: this.config.enabled,
-        installId,
-      });
-    }
+      if (this.config.debug) {
+        console.log('[Mobana] Initialized:', {
+          appId: this.config.appId,
+          endpoint: this.config.endpoint,
+          enableTracking: true,
+          installId,
+        });
+      }
 
-    // Flush any queued conversions when SDK is initialized
-    await this.flushConversionQueue();
+      // Flush any conversions that were queued before this init call.
+      await this.flushConversionQueue();
 
-    // Fire attribution in the background unless explicitly disabled.
-    // Non-blocking — init() resolves immediately after this.
-    // The result is cached so any subsequent getAttribution() call returns instantly.
-    if (this.config.autoAttribute !== false) {
-      this.getAttribution().catch(() => {});
+      // Fire attribution in the background unless explicitly delayed.
+      // Non-blocking — init() resolves immediately after this.
+      // The result is cached so any subsequent getAttribution() call returns instantly.
+      if (this.config.autoAttribute !== false) {
+        this.getAttribution().catch(() => {});
+      }
+    } else {
+      if (this.config.debug) {
+        console.log('[Mobana] Initialized with tracking disabled — no storage writes, no network calls.');
+      }
     }
   }
 
   /**
-   * Enable or disable the SDK dynamically
-   * Useful for GDPR consent flows
+   * Enable or disable attribution and tracking dynamically
+   * Useful for GDPR consent flows — does NOT affect flows (startFlow/prefetchFlow)
    * 
-   * @param enabled - Whether the SDK should be enabled
+   * @param enabled - Whether tracking should be enabled
    */
-  setEnabled(enabled: boolean): void {
+  setTrackingEnabled(enabled: boolean): void {
     if (!this.config) {
       console.warn('[Mobana] SDK not configured. Call init() first.');
       return;
     }
 
-    this.config.enabled = enabled;
+    this.config.enableTracking = enabled;
 
     if (this.config.debug) {
-      console.log(`[Mobana] ${enabled ? 'Enabled' : 'Disabled'}`);
+      console.log(`[Mobana] Tracking ${enabled ? 'enabled' : 'disabled'}`);
     }
 
     if (enabled) {
-      this.flushConversionQueue();
+      // Ensure installId exists now that consent has been granted — it may not have been
+      // generated yet if init() was called with enableTracking: false.
+      getInstallId().then(() => {
+        this.flushConversionQueue();
+      }).catch(() => {});
+    } else {
+      // Discard any conversions queued before opt-out (e.g. failed sends from when tracking
+      // was enabled). Privacy guarantee: opting out leaves no pending data to be sent later.
+      clearConversionQueue().catch(() => {});
     }
   }
 
@@ -211,11 +225,11 @@ class MobanaSDK {
       return { status: 'error', attribution: null, error: { type: 'sdk_not_configured' } };
     }
 
-    if (!this.config.enabled) {
+    if (!this.config.enableTracking) {
       if (this.config.debug) {
-        console.log('[Mobana] SDK disabled, skipping attribution');
+        console.log('[Mobana] Tracking disabled, skipping attribution');
       }
-      return { status: 'error', attribution: null, error: { type: 'sdk_disabled' } };
+      return { status: 'error', attribution: null, error: { type: 'tracking_disabled' } };
     }
 
     // Return in-memory cache if available (fastest)
@@ -226,9 +240,9 @@ class MobanaSDK {
     // Check AsyncStorage cache
     const cached = await getCachedResult<T>();
 
-    // Re-check enabled after the async read — it may have changed (e.g. GDPR opt-out)
-    if (!this.config?.enabled) {
-      return { status: 'error', attribution: null, error: { type: 'sdk_disabled' } };
+    // Re-check after the async read — tracking may have been disabled (e.g. GDPR opt-out) while waiting
+    if (!this.config?.enableTracking) {
+      return { status: 'error', attribution: null, error: { type: 'tracking_disabled' } };
     }
 
     if (cached) {
@@ -297,9 +311,9 @@ class MobanaSDK {
       return;
     }
 
-    if (!this.config.enabled) {
+    if (!this.config.enableTracking) {
       if (this.config.debug) {
-        console.log('[Mobana] SDK disabled, skipping conversion');
+        console.log('[Mobana] Tracking disabled, skipping conversion');
       }
       return;
     }
@@ -339,15 +353,26 @@ class MobanaSDK {
    * Useful for GDPR data access/deletion requests — this is the identifier
    * Mobana uses server-side to associate attribution and conversion records.
    * 
-   * @returns The install ID string
+   * Returns null if tracking is disabled (enableTracking: false) — in that case no
+   * install ID has been generated yet and no server-side record exists to look up.
+   * 
+   * @returns The install ID string, or null if tracking is disabled
    * 
    * @example
    * ```typescript
    * const installId = await Mobana.getInstallId();
-   * // Share with support for data access/deletion: support@mobana.ai
+   * if (installId) {
+   *   // Share with support for data access/deletion: support@mobana.ai
+   * }
    * ```
    */
-  async getInstallId(): Promise<string> {
+  async getInstallId(): Promise<string | null> {
+    if (!this.config?.enableTracking) {
+      if (this.config?.debug) {
+        console.log('[Mobana] getInstallId() called with tracking disabled — no ID has been generated');
+      }
+      return null;
+    }
     return getInstallId();
   }
 
@@ -419,14 +444,6 @@ class MobanaSDK {
       return { completed: false, dismissed: true, error: 'SDK_NOT_CONFIGURED' };
     }
 
-    // Check if SDK is enabled
-    if (!this.config.enabled) {
-      if (this.config.debug) {
-        console.log('[Mobana] SDK disabled, cannot start flow');
-      }
-      return { completed: false, dismissed: true, error: 'SDK_NOT_CONFIGURED' };
-    }
-
     // Check if provider is mounted
     const flowContext = getGlobalFlowContext();
     if (!flowContext?.isProviderMounted) {
@@ -439,12 +456,16 @@ class MobanaSDK {
 
     try {
       const endpoint = this.getEndpoint();
-      const installId = await getInstallId();
 
-      // Ensure attribution is loaded (for passing to flow context).
-      // Fast after first call — returns from in-memory cache without network.
-      // We don't fail if attribution isn't matched; flows work for organic installs too.
-      await this.getAttribution();
+      // When tracking is disabled, don't send installId — no trace is left in Mobana.
+      // Flows work regardless of tracking consent.
+      const installId = this.config.enableTracking ? await getInstallId() : null;
+
+      // Load attribution for the flow context (so flows can personalise via getAttribution()).
+      // Only when tracking is enabled — skip the network call otherwise (attribution will be null).
+      if (this.config.enableTracking) {
+        await this.getAttribution();
+      }
 
       // Check cache for this flow
       const cached = await getCachedFlow(slug);
@@ -563,13 +584,10 @@ class MobanaSDK {
       return;
     }
 
-    if (!this.config.enabled) {
-      return;
-    }
-
     try {
       const endpoint = this.getEndpoint();
-      const installId = await getInstallId();
+      // When tracking is disabled, don't send installId — no trace is left in Mobana.
+      const installId = this.config.enableTracking ? await getInstallId() : null;
       const cached = await getCachedFlow(slug);
 
       if (this.config.debug) {
@@ -617,7 +635,7 @@ class MobanaSDK {
     params: {
       slug: string;
       config: FlowConfig;
-      installId: string;
+      installId: string | null;
       endpoint: string;
       appKey: string;
       options?: FlowOptions;
@@ -680,9 +698,9 @@ class MobanaSDK {
         }
       }
 
-      // Re-check enabled before making the network call — the SDK may have been
-      // disabled (via setEnabled(false)) while waiting for install ID or referrer
-      if (!this.config?.enabled) {
+      // Re-check before making the network call — tracking may have been disabled
+      // (via setTrackingEnabled(false)) while waiting for install ID or referrer
+      if (!this.config?.enableTracking) {
         return { status: 'no_match', attribution: null };
       }
 
@@ -761,7 +779,7 @@ class MobanaSDK {
   }
 
   private async flushConversionQueue(): Promise<void> {
-    if (!this.config?.enabled) {
+    if (!this.config?.enableTracking) {
       return;
     }
 

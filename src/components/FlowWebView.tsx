@@ -201,8 +201,8 @@ export interface FlowWebViewProps {
   config: FlowConfig;
   /** Flow slug identifier */
   slug: string;
-  /** Install ID for tracking */
-  installId: string;
+  /** Install ID for tracking. Null when tracking is disabled — flow events are suppressed. */
+  installId: string | null;
   /** API endpoint */
   endpoint: string;
   /** App key for X-App-Key header */

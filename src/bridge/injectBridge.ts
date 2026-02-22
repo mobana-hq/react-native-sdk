@@ -6,7 +6,8 @@ import type { Attribution, SafeArea, ColorScheme } from '../types';
 export interface BridgeContext {
   attribution: Attribution | null;
   params: Record<string, unknown>;
-  installId: string;
+  /** Null when tracking is disabled — no ID is exposed to flow JS code. */
+  installId: string | null;
   platform: 'ios' | 'android';
   colorScheme: ColorScheme;
   localData: Record<string, unknown>;
