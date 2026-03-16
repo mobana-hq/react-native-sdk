@@ -13,6 +13,7 @@ import {
   StatusBar,
   Platform,
   ActivityIndicator,
+  NativeModules,
   useColorScheme,
 } from 'react-native';
 import type { WebViewProps } from 'react-native-webview';
@@ -21,6 +22,21 @@ import type { FlowConfig, FlowResult, FlowOptions, Attribution } from '../types'
 import type { FlowWebViewProps } from './FlowWebView';
 import { trackFlowEvent } from '../api';
 import { generateUUID } from '../storage';
+
+/**
+ * Compute relative luminance of a hex color (sRGB).
+ * Returns 0 (black) to 1 (white). Used to determine whether
+ * navigation bar icons should be light or dark.
+ */
+function getHexLuminance(hex: string): number {
+  const raw = hex.replace('#', '');
+  const r = parseInt(raw.substring(0, 2), 16) / 255;
+  const g = parseInt(raw.substring(2, 4), 16) / 255;
+  const b = parseInt(raw.substring(4, 6), 16) / 255;
+  const toLinear = (c: number) =>
+    c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  return 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
+}
 
 // Optional: react-native-webview (required for Flows; checked at provider mount)
 let WebViewAvailable = false;
@@ -114,6 +130,21 @@ export interface MobanaProviderProps {
    * backgroundColor={{ light: '#F0EEE9', dark: '#1A1A1A' }}
    */
   backgroundColor?: string | { light: string; dark: string };
+  /**
+   * Override the color scheme used for the flow modal.
+   * - `'auto'` (default) — follows the system theme via `useColorScheme()`
+   * - `'light'` / `'dark'` — forces the specified appearance regardless of the system setting
+   *
+   * Affects background color resolution (when using the `{ light, dark }` object form),
+   * iOS status bar style, and Android navigation bar icon color.
+   *
+   * @default 'auto'
+   *
+   * @example
+   * // Force dark appearance for apps that always use a dark theme
+   * <MobanaProvider colorScheme="dark" backgroundColor="#1A1A1A">
+   */
+  colorScheme?: 'light' | 'dark' | 'auto';
 }
 
 /**
@@ -140,9 +171,12 @@ export function MobanaProvider({
   webViewProps,
   loadingComponent,
   backgroundColor,
+  colorScheme: colorSchemeProp,
 }: MobanaProviderProps) {
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
+  const systemScheme = useColorScheme();
+  const resolvedScheme =
+    !colorSchemeProp || colorSchemeProp === 'auto' ? systemScheme : colorSchemeProp;
+  const isDark = resolvedScheme === 'dark';
   const bgColor = backgroundColor
     ? typeof backgroundColor === 'string'
       ? backgroundColor
@@ -352,6 +386,28 @@ export function MobanaProvider({
     [currentRequest]
   );
 
+  // Android: override the dialog window's navigation bar appearance.
+  // enableEdgeToEdge() (triggered by navigationBarTranslucent) bases the nav bar
+  // icon color on the *system* dark mode, which is wrong for apps that force a
+  // specific theme.  We derive it from the actual bgColor luminance instead and
+  // re-apply via a ViewTreeObserver so it survives React re-renders.
+  const { onShow: userOnShow, ...restModalProps } = modalProps ?? {};
+  const handleModalShow = useCallback<NonNullable<ModalProps['onShow']>>((event) => {
+    if (Platform.OS === 'android') {
+      const bgIsDark = getHexLuminance(bgColor) < 0.5;
+      NativeModules.Mobana?.setDialogNavigationBar(bgIsDark, bgColor);
+    }
+    userOnShow?.(event);
+  }, [bgColor, userOnShow]);
+
+  // Re-apply if bgColor changes while the modal is already visible
+  useEffect(() => {
+    if (Platform.OS === 'android' && currentRequest) {
+      const bgIsDark = getHexLuminance(bgColor) < 0.5;
+      NativeModules.Mobana?.setDialogNavigationBar(bgIsDark, bgColor);
+    }
+  }, [bgColor, currentRequest]);
+
   return (
     <FlowContext.Provider value={contextValue}>
       {children}
@@ -361,9 +417,10 @@ export function MobanaProvider({
         presentationStyle="fullScreen"
         statusBarTranslucent={Platform.OS === 'android'}
         onRequestClose={undefined} // Disable Android back button dismiss
+        onShow={handleModalShow}
         // navigationBarTranslucent is supported in RN 0.72+ but types may be outdated
         {...(Platform.OS === 'android' ? { navigationBarTranslucent: true } : {})}
-        {...modalProps}
+        {...restModalProps}
       >
         <View style={[styles.modalContainer, { backgroundColor: bgColor }]}>
           {Platform.OS === 'ios' && (
@@ -385,6 +442,7 @@ export function MobanaProvider({
               onCallback={currentRequest.options?.onCallback}
               webViewProps={webViewProps}
               backgroundColor={backgroundColor}
+              resolvedColorScheme={isDark ? 'dark' : 'light'}
               debug={currentRequest.debug}
             />
           )}

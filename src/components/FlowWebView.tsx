@@ -229,6 +229,11 @@ export interface FlowWebViewProps {
    * Defaults to #FFFFFF (light) / #1c1c1e (dark).
    */
   backgroundColor?: string | { light: string; dark: string };
+  /**
+   * Resolved color scheme from MobanaProvider (respects the colorScheme prop override).
+   * When provided, overrides the internal useColorScheme() hook.
+   */
+  resolvedColorScheme?: 'light' | 'dark';
   /** Enable debug logging */
   debug?: boolean;
 }
@@ -252,12 +257,14 @@ export function FlowWebView({
   onCallback,
   webViewProps,
   backgroundColor,
+  resolvedColorScheme,
   debug = false,
 }: FlowWebViewProps) {
   const webViewRef = useRef<WebViewType>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [htmlContent, setHtmlContent] = useState<string | null>(null);
-  const colorScheme = useColorScheme();
+  const systemScheme = useColorScheme();
+  const colorScheme = resolvedColorScheme ?? (systemScheme === 'dark' ? 'dark' : 'light');
   const isDark = colorScheme === 'dark';
   const bgColor = backgroundColor
     ? typeof backgroundColor === 'string'
@@ -283,7 +290,7 @@ export function FlowWebView({
         params,
         installId,
         platform: Platform.OS === 'ios' ? 'ios' : 'android',
-        colorScheme: colorScheme === 'dark' ? 'dark' : 'light',
+        colorScheme,
         localData,
         safeArea,
       });
@@ -294,7 +301,7 @@ export function FlowWebView({
         config.js,
         bridgeScript,
         safeArea,
-        colorScheme === 'dark' ? 'dark' : 'light'
+        colorScheme
       );
 
       setHtmlContent(fullHtml);
