@@ -124,6 +124,8 @@ npm install react-native-permissions \
   react-native-safe-area-context
 ```
 
+> **Expo users:** You still need to install `react-native-permissions` if your flows use permission prompts — the Mobana config plugin handles native setup (Podfile, Info.plist, AndroidManifest) automatically, but the package must be installed. Use `npx expo install` instead of `npm install`.
+>
 > For iOS Podfile setup, Android manifest permissions, and Expo plugin configuration, see the **[full installation guide](https://mobana.ai/docs/installation)**.
 
 ## Quick Start
