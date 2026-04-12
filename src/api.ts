@@ -257,10 +257,6 @@ export async function fetchFlow(
 
     const data = await response.json();
 
-    if (debug) {
-      console.log(`[Mobana] Flow response:`, data);
-    }
-
     return data as FlowFetchResponse;
   } catch (error) {
     clearTimeout(timeoutId);
